@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>羽球專業計分器</title>
+    <style>
+        :root { --blue: #007AFF; --red: #FF3B30; --gold: #FFD700; --court: #0d4a2a; --win: #c4a000; }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body { 
+            font-family: 'Arial Black', sans-serif; margin: 0; background: #000; color: white;
+            height: 100vh; display: flex; overflow: hidden; user-select: none;
+        }
+        
+        .side-bar { width: 60px; display: flex; flex-direction: column; z-index: 100; border: 1px solid #222; }
+        .btn-ctrl {
+            flex: 1; border: none; font-size: 16px; font-weight: bold; color: white; 
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            writing-mode: vertical-lr; text-shadow: 1px 1px 2px #000;
+        }
+        .undo { background: #333; }
+        .reset { background: #600; }
+
+        .court { flex: 1; display: flex; background: #000; gap: 5px; padding: 5px; }
+        .team-area { 
+            flex: 1; position: relative; background: var(--court); 
+            border-radius: 10px; border: 8px solid transparent;
+            display: flex; flex-direction: column; cursor: pointer; transition: 0.4s;
+        }
+        .serving-team { border-color: var(--gold); box-shadow: inset 0 0 50px rgba(255,215,0,0.4); }
+        .winner-team { background: var(--win) !important; animation: blink 1s infinite; }
+
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+
+        .score-val {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 38vw; font-weight: 900; opacity: 0.85; pointer-events: none; z-index: 5;
+            text-shadow: 0 0 30px rgba(0,0,0,0.8);
+        }
+
+        .players { flex: 1; display: flex; flex-direction: column; padding: 10px; pointer-events: none; }
+        .slot {
+            flex: 1; margin: 5px; border: 2px dashed rgba(255,255,255,0.1);
+            border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            font-size: 24px; background: rgba(0,0,0,0.15); transition: 0.3s;
+        }
+        .is-server { 
+            background: var(--gold) !important; color: black; font-weight: 900; 
+            border: none; box-shadow: 0 0 20px var(--gold);
+        }
+        .pos-hint { font-size: 13px; margin-bottom: 4px; opacity: 0.6; }
+
+        .status-msg {
+            position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.6); padding: 5px 20px; border-radius: 20px;
+            font-size: 18px; color: var(--gold); z-index: 20; display: none;
+        }
+        
+        .switch-srv {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(255,255,255,0.9); border-radius: 25px;
+            padding: 8px 20px; font-size: 16px; z-index: 20; color: #000; font-weight: bold;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+
+<div class="side-bar">
+    <div class="btn-ctrl undo" onclick="doUndo()">上一步 ↩</div>
+</div>
+
+<div class="court">
+    <div id="courtA" class="team-area serving-team" onclick="handleScore(1)">
+        <div id="val1" class="score-val">0</div>
+        <div class="players">
+            <div id="slotA_top" class="slot"><span class="pos-hint">左/奇</span><span id="nameA_top">A1</span></div>
+            <div id="slotA_bot" class="slot"><span id="nameA_bot">A2</span><span class="pos-hint">右/偶</span></div>
+        </div>
+        <div id="btnSrvA" class="switch-srv" onclick="manualServer(1, event)">誰先發球?</div>
+    </div>
+
+    <div id="courtB" class="team-area" onclick="handleScore(2)">
+        <div id="val2" class="score-val">0</div>
+        <div class="players">
+            <div id="slotB_top" class="slot"><span class="pos-hint">右/偶</span><span id="nameB_top">B1</span></div>
+            <div id="slotB_bot" class="slot"><span id="nameB_bot">B2</span><span class="pos-hint">左/奇</span></div>
+        </div>
+        <div id="btnSrvB" class="switch-srv" onclick="manualServer(2, event)">誰先發球?</div>
+    </div>
+</div>
+
+<div id="status" class="status-msg">DEUCE</div>
+
+<div class="side-bar">
+    <div class="btn-ctrl reset" onclick="doReset()">重 置 ↻</div>
+</div>
+
+<script>
+    let s1 = 0, s2 = 0, srvTeam = 1, history = [], gameOver = false;
+    let state = { aTop: "A1", aBot: "A2", bTop: "B1", bBot: "B2" };
+
+    function render() {
+        document.getElementById('val1').innerText = s1;
+        document.getElementById('val2').innerText = s2;
+        
+        const courtA = document.getElementById('courtA');
+        const courtB = document.getElementById('courtB');
+        const statusEl = document.getElementById('status');
+        const btnA = document.getElementById('btnSrvA');
+        const btnB = document.getElementById('btnSrvB');
+
+        courtA.className = 'team-area' + (srvTeam === 1 ? ' serving-team' : '');
+        courtB.className = 'team-area' + (srvTeam === 2 ? ' serving-team' : '');
+
+        // 核心邏輯：一旦有人得分，隱藏設定按鈕
+        if (s1 === 0 && s2 === 0 && !gameOver) {
+            btnA.style.display = "block";
+            btnB.style.display = "block";
+        } else {
+            btnA.style.display = "none";
+            btnB.style.display = "none";
+        }
+
+        if (gameOver) {
+            if (s1 > s2) courtA.classList.add('winner-team');
+            else courtB.classList.add('winner-team');
+        }
+
+        if (!gameOver && s1 >= 20 && s2 >= 20 && Math.abs(s1 - s2) < 2) {
+            statusEl.innerText = "DEUCE (上限30)";
+            statusEl.style.display = "block";
+        } else {
+            statusEl.style.display = "none";
+        }
+
+        document.getElementById('nameA_top').innerText = state.aTop;
+        document.getElementById('nameA_bot').innerText = state.aBot;
+        document.getElementById('nameB_top').innerText = state.bTop;
+        document.getElementById('nameB_bot').innerText = state.bBot;
+
+        const ids = ['slotA_top', 'slotA_bot', 'slotB_top', 'slotB_bot'];
+        ids.forEach(id => document.getElementById(id).classList.remove('is-server'));
+
+        if (!gameOver) {
+            if (srvTeam === 1) {
+                let id = (s1 % 2 === 0) ? 'slotA_bot' : 'slotA_top';
+                document.getElementById(id).classList.add('is-server');
+            } else {
+                let id = (s2 % 2 === 0) ? 'slotB_top' : 'slotB_bot';
+                document.getElementById(id).classList.add('is-server');
+            }
+        }
+    }
+
+    function checkWinner() {
+        if (s1 === 30 || s2 === 30) return true;
+        if (s1 >= 21 && (s1 - s2) >= 2) return true;
+        if (s2 >= 21 && (s2 - s1) >= 2) return true;
+        return false;
+    }
+
+    function handleScore(team) {
+        if (gameOver) return;
+        history.push(JSON.stringify({s1, s2, srvTeam, state, gameOver}));
+        if(navigator.vibrate) navigator.vibrate(50);
+
+        if (team === srvTeam) {
+            if (team === 1) { s1++; [state.aTop, state.aBot] = [state.aBot, state.aTop]; }
+            else { s2++; [state.bTop, state.bBot] = [state.bBot, state.bTop]; }
+        } else {
+            if (team === 1) s1++; else s2++;
+            srvTeam = team;
+        }
+
+        if (checkWinner()) gameOver = true;
+        render();
+    }
+
+    function manualServer(team, e) {
+        e.stopPropagation();
+        srvTeam = team;
+        render();
+    }
+
+    function doUndo() {
+        if (history.length > 0) {
+            let last = JSON.parse(history.pop());
+            s1 = last.s1; s2 = last.s2; srvTeam = last.srvTeam; state = last.state; gameOver = last.gameOver;
+            render();
+        }
+    }
+
+    function doReset() {
+        if(confirm("重置比賽？")) {
+            s1=0; s2=0; srvTeam=1; history=[]; gameOver = false;
+            state = { aTop: "A1", aBot: "A2", bTop: "B1", bBot: "B2" };
+            render();
+        }
+    }
+    render();
+</script>
+</body>
+</html>
